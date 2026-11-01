@@ -110,37 +110,45 @@ function trackSource(src) {
   };
 }
 
-function playBuf(name, when, rate = 1, gain = 0.35, duration) {
-  const b = buffers[name];
-  if (!b || !ctx || state.mutes[name.includes('p') ? 'piano' : name.includes('b') ? 'bass' : name.includes('g') ? 'guitar' : name.includes('v') ? 'violin' : 'kit']) return;
-  const src = ctx.createBufferSource();
+function chairForSample(name) {
+  if (name.startsWith('p')) return 'piano';
+  if (name.startsWith('b')) return 'bass';
+  if (name.startsWith('g')) return 'guitar';
+  if (name.startsWith('v')) return 'violin';
+  return 'kit';
+}
+
+function playBuf(name, when, rate = 1, gain = 0.35, duration, context = ctx, targetBus = bus, bufs = buffers) {
+  const b = bufs[name];
+  if (!b || !context || state.mutes[chairForSample(name)]) return;
+  const src = context.createBufferSource();
   src.buffer = b;
   src.playbackRate.value = rate;
-  const g = ctx.createGain();
+  const g = context.createGain();
   g.gain.setValueAtTime(0, when);
   g.gain.linearRampToValueAtTime(gain, when + 0.01);
   if (duration) {
-    g.gain.setValueAtTime(gain, when + duration - 0.02);
+    g.gain.setValueAtTime(gain, when + Math.max(0, duration - 0.02));
     g.gain.linearRampToValueAtTime(0, when + duration);
   }
   src.connect(g);
-  g.connect(bus);
+  g.connect(targetBus);
   src.start(when);
   if (duration) src.stop(when + duration);
-  trackSource(src);
+  if (context === ctx) trackSource(src);
+  return src;
 }
 
 function rateFromMidi(midi, base) { return Math.pow(2, (midi - base) / 12); }
 
 function chordForBar(bar) {
-  // Simple resolving progression in key
   const roots = { 'A minor': [57, 53, 48, 45], 'C major': [60, 55, 53, 48], 'E major': [64, 59, 56, 52], 'D minor': [62, 57, 53, 50], 'G major': [67, 62, 59, 55] };
   const r = roots[state.key] || roots['A minor'];
   const root = r[Math.min(bar, r.length - 1)];
   return { piano: [root, root + 4, root + 7, root + 12], bass: root - 24, guitar: root - 12 };
 }
 
-function scheduleStep(step, when) {
+function scheduleStep(step, when, context, targetBus, bufs, noteCollector) {
   const bar = Math.floor(step / STEPS_PER_BAR);
   const s = step % STEPS_PER_BAR;
   const stepDur = 60 / state.bpm / 4;
@@ -148,40 +156,57 @@ function scheduleStep(step, when) {
   const rec = state.recipe.id;
   const isLast = bar === state.bars - 1;
 
+  const note = (chair, midi, durBeats = 0.25) => {
+    if (noteCollector && !state.mutes[chair]) noteCollector.push({ chair, midi, when, dur: durBeats * stepDur });
+  };
+
   if (s % 2 === 0 && !(rec === 'final-hit' && isLast && s < 12)) {
-    playBuf('hat', when, 1, 0.08);
+    playBuf('hat', when, 1, 0.08, undefined, context, targetBus, bufs);
+    note('kit', 42);
   }
   if (s === 0 && !(rec === 'final-hit' && isLast && s < 15)) {
-    playBuf('kick', when, 1, 0.65);
-    playBuf('pC4', when, rateFromMidi(ch.piano[2], 60), 0.3);
-    playBuf('pA3', when, rateFromMidi(ch.piano[1], 57), 0.22);
-    playBuf('bA1', when, rateFromMidi(ch.bass, 33), 0.45);
-    playBuf('gA2', when, rateFromMidi(ch.guitar, 45), 0.22);
+    playBuf('kick', when, 1, 0.65, undefined, context, targetBus, bufs);
+    note('kit', 36);
+    playBuf('pC4', when, rateFromMidi(ch.piano[2], 60), 0.3, undefined, context, targetBus, bufs);
+    note('piano', ch.piano[2]);
+    playBuf('pA3', when, rateFromMidi(ch.piano[1], 57), 0.22, undefined, context, targetBus, bufs);
+    note('piano', ch.piano[1]);
+    playBuf('bA1', when, rateFromMidi(ch.bass, 33), 0.45, undefined, context, targetBus, bufs);
+    note('bass', ch.bass);
+    playBuf('gA2', when, rateFromMidi(ch.guitar, 45), 0.22, undefined, context, targetBus, bufs);
+    note('guitar', ch.guitar);
   }
-  if (s === 8 && rec !== 'final-hit') playBuf('snare', when, 1, 0.4);
+  if (s === 8 && rec !== 'final-hit') {
+    playBuf('snare', when, 1, 0.4, undefined, context, targetBus, bufs);
+    note('kit', 38);
+  }
   if (rec === 'soft-land' && s === 0) {
-    playBuf('vA3', when, rateFromMidi(ch.piano[0], 57), 0.25, stepDur * 16);
+    const hold = stepDur * 16;
+    playBuf('vA3', when, rateFromMidi(ch.piano[0], 57), 0.25, hold, context, targetBus, bufs);
+    note('violin', ch.piano[0], 4);
   }
   if (rec === 'tag' && isLast && s === 0) {
-    playBuf('pC4', when + stepDur * 2, rateFromMidi(ch.piano[3], 60), 0.28);
-    playBuf('pC4', when + stepDur * 6, rateFromMidi(ch.piano[2], 60), 0.25);
+    playBuf('pC4', when + stepDur * 2, rateFromMidi(ch.piano[3], 60), 0.28, undefined, context, targetBus, bufs);
+    note('piano', ch.piano[3]);
+    playBuf('pC4', when + stepDur * 6, rateFromMidi(ch.piano[2], 60), 0.25, undefined, context, targetBus, bufs);
+    note('piano', ch.piano[2]);
   }
   if (rec === 'final-hit' && isLast && s === 0) {
-    playBuf('kick', when, 1, 0.8);
-    playBuf('snare', when, 1, 0.5);
-    playBuf('pC4', when, rateFromMidi(ch.piano[2], 60), 0.4);
+    playBuf('kick', when, 1, 0.8, undefined, context, targetBus, bufs);
+    note('kit', 36);
+    playBuf('snare', when, 1, 0.5, undefined, context, targetBus, bufs);
+    note('kit', 38);
+    playBuf('pC4', when, rateFromMidi(ch.piano[2], 60), 0.4, undefined, context, targetBus, bufs);
+    note('piano', ch.piano[2]);
   }
 }
 
 function scheduler() {
   while (state.nextStepTime < ctx.currentTime + SCHEDULE_AHEAD) {
-    scheduleStep(state.step, state.nextStepTime);
+    scheduleStep(state.step, state.nextStepTime, ctx, bus, buffers);
     const stepDur = 60 / state.bpm / 4;
     state.nextStepTime += stepDur;
     state.step = (state.step + 1) % (state.bars * STEPS_PER_BAR);
-    if (state.step === 0 && state.recipe.id === 'ritard') {
-      // simple ritard handled by reading current bpm; user can change live
-    }
   }
 }
 
@@ -209,8 +234,6 @@ function stop() {
 
 function updatePlayhead() {
   if (!state.playing) return;
-  const elapsed = ctx.currentTime - (state.nextStepTime - (state.step * (60 / state.bpm / 4)));
-  // simple highlight based on step
   paint();
   rafId = requestAnimationFrame(updatePlayhead);
 }
@@ -220,23 +243,39 @@ document.addEventListener('visibilitychange', () => {
 });
 
 async function exportWav() {
+  if (!Object.keys(rawBuffers).length) {
+    alert('Play first so samples load, then export.');
+    return;
+  }
   const sampleRate = 48000;
   const bars = state.bars;
   const bpm = state.bpm;
   const lengthSamples = Math.round(bars * 4 * 60 / bpm * sampleRate);
-  const offline = new OfflineAudioContext(2, lengthSamples + sampleRate, sampleRate); // extra for tail
-  // decode raw into offline
+  const tailSamples = sampleRate; // 1s tail
+  const offline = new OfflineAudioContext(2, lengthSamples + tailSamples, sampleRate);
   const offBuffers = {};
   for (const k of Object.keys(rawBuffers)) {
     offBuffers[k] = await offline.decodeAudioData(rawBuffers[k].slice(0));
   }
-  // simple render by scheduling into offline (simplified for MVP)
   const offBus = offline.createGain();
-  offBus.connect(offline.destination);
-  // For brevity in this MVP, render a representative mix; full per-step scheduling would mirror live
-  // Peak normalize later
+  offBus.gain.value = 0.7;
+  const offComp = offline.createDynamicsCompressor();
+  offComp.threshold.value = -12;
+  offComp.knee.value = 6;
+  offComp.ratio.value = 8;
+  offComp.attack.value = 0.003;
+  offComp.release.value = 0.1;
+  offBus.connect(offComp);
+  offComp.connect(offline.destination);
+
+  const totalSteps = bars * STEPS_PER_BAR;
+  const stepDur = 60 / bpm / 4;
+  for (let step = 0; step < totalSteps; step++) {
+    const when = step * stepDur;
+    scheduleStep(step, when, offline, offBus, offBuffers);
+  }
+
   const rendered = await offline.startRendering();
-  // fold tail
   const dataL = rendered.getChannelData(0);
   const dataR = rendered.getChannelData(1);
   const mainLen = lengthSamples;
@@ -244,10 +283,15 @@ async function exportWav() {
     dataL[i % mainLen] += dataL[mainLen + i] * 0.5;
     dataR[i % mainLen] += dataR[mainLen + i] * 0.5;
   }
-  // trim and peak at -1 dBFS
-  const peak = Math.max(...dataL.map(Math.abs), ...dataR.map(Math.abs));
-  const gain = peak > 0 ? Math.min(1, Math.pow(10, -1 / 20) / peak) : 1;
-  const wav = encodeWav(dataL.slice(0, mainLen).map(s => s * gain), dataR.slice(0, mainLen).map(s => s * gain), sampleRate);
+  let peak = 0;
+  for (let i = 0; i < mainLen; i++) {
+    peak = Math.max(peak, Math.abs(dataL[i]), Math.abs(dataR[i]));
+  }
+  const target = Math.pow(10, -1 / 20);
+  const gain = peak > 0 ? Math.min(1, target / peak) : 1;
+  const left = dataL.slice(0, mainLen).map(s => s * gain);
+  const right = dataR.slice(0, mainLen).map(s => s * gain);
+  const wav = encodeWav(left, right, sampleRate);
   download(wav, `closefour-${state.recipe.id}-${bpm}bpm-${state.key.replace(' ', '')}.wav`);
 }
 
@@ -269,12 +313,88 @@ function encodeWav(left, right, sampleRate) {
 }
 
 function exportMidi() {
-  // Minimal MIDI file with tempo and one track of notes
   const bpm = state.bpm;
-  const ticks = 480;
-  // Simplified placeholder MIDI
-  const midi = new Uint8Array([0x4d,0x54,0x68,0x64,0x00,0x00,0x00,0x06,0x00,0x01,0x00,0x01,0x01,0xe0]);
+  const bars = state.bars;
+  const stepDur = 60 / bpm / 4;
+  const ticksPerBeat = 480;
+  const notes = [];
+  const totalSteps = bars * STEPS_PER_BAR;
+  for (let step = 0; step < totalSteps; step++) {
+    const when = step * stepDur;
+    scheduleStep(step, when, null, null, {}, notes);
+  }
+  // Group by chair
+  const chairs = ['kit', 'piano', 'bass', 'guitar', 'violin'];
+  const tracks = chairs.map(c => notes.filter(n => n.chair === c));
+  const midi = buildMidi(bpm, tracks, ticksPerBeat);
   download(new Blob([midi], { type: 'audio/midi' }), `closefour-${state.recipe.id}-${bpm}bpm-${state.key.replace(' ', '')}.mid`);
+}
+
+function buildMidi(bpm, tracks, tpq) {
+  const header = [0x4d,0x54,0x68,0x64, 0x00,0x00,0x00,0x06, 0x00,0x01, (tracks.length>>8)&0xff, tracks.length&0xff, (tpq>>8)&0xff, tpq&0xff];
+  const parts = [new Uint8Array(header)];
+  const usPerQuarter = Math.round(60000000 / bpm);
+  tracks.forEach((notes, idx) => {
+    const events = [];
+    // tempo only on first track
+    if (idx === 0) {
+      events.push({ tick: 0, data: [0xff, 0x51, 0x03, (usPerQuarter>>16)&0xff, (usPerQuarter>>8)&0xff, usPerQuarter&0xff] });
+      events.push({ tick: 0, data: [0xff, 0x58, 0x04, 0x04, 0x02, 0x18, 0x08] }); // 4/4
+    }
+    notes.sort((a,b) => a.when - b.when);
+    let lastTick = 0;
+    notes.forEach(n => {
+      const tick = Math.round((n.when / (60/bpm)) * tpq);
+      const durTicks = Math.max(1, Math.round((n.dur / (60/bpm)) * tpq));
+      const deltaOn = tick - lastTick;
+      events.push({ tick, delta: deltaOn, data: [0x90, n.midi & 0x7f, 80] });
+      const offTick = tick + durTicks;
+      events.push({ tick: offTick, delta: durTicks, data: [0x80, n.midi & 0x7f, 0] });
+      lastTick = offTick;
+    });
+    // end of track
+    events.push({ tick: lastTick, delta: 0, data: [0xff, 0x2f, 0x00] });
+    const trackData = writeTrack(events);
+    parts.push(trackData);
+  });
+  return concatUint8(parts);
+}
+
+function writeTrack(events) {
+  const bytes = [];
+  let last = 0;
+  events.forEach(ev => {
+    const delta = ev.delta !== undefined ? ev.delta : (ev.tick - last);
+    writeVarLen(bytes, Math.max(0, delta));
+    bytes.push(...ev.data);
+    last = ev.tick;
+  });
+  const len = bytes.length;
+  const header = [0x4d,0x54,0x72,0x6b, (len>>24)&0xff, (len>>16)&0xff, (len>>8)&0xff, len&0xff];
+  return new Uint8Array([...header, ...bytes]);
+}
+
+function writeVarLen(arr, val) {
+  let buf = val & 0x7f;
+  val >>= 7;
+  while (val > 0) {
+    buf <<= 8;
+    buf |= ((val & 0x7f) | 0x80);
+    val >>= 7;
+  }
+  while (true) {
+    arr.push(buf & 0xff);
+    if (buf & 0x80) buf >>= 8;
+    else break;
+  }
+}
+
+function concatUint8(arrays) {
+  const total = arrays.reduce((s, a) => s + a.length, 0);
+  const out = new Uint8Array(total);
+  let o = 0;
+  arrays.forEach(a => { out.set(a, o); o += a.length; });
+  return out;
 }
 
 function download(blob, name) {
@@ -302,7 +422,7 @@ function paint() {
   for (let i = 0; i < state.bars; i++) {
     const d = document.createElement('div');
     d.className = 'bar close' + (state.playing && Math.floor(state.step / STEPS_PER_BAR) === i ? ' active' : '');
-    d.innerHTML = `<div class="n">${i + 1}</div><div class="c">${chordForBar(i).piano[0] ? 'I' : ''}</div>`;
+    d.innerHTML = `<div class=\"n\">${i + 1}</div><div class=\"c\">resolve</div>`;
     barsEl.appendChild(d);
   }
   document.getElementById('punch').textContent = punch();
@@ -328,5 +448,4 @@ document.getElementById('bpm').onchange = e => { state.bpm = +e.target.value; sa
 document.getElementById('key').onchange = e => { state.key = e.target.value; saveState(); paint(); };
 document.getElementById('bars').onchange = e => { state.bars = +e.target.value; saveState(); paint(); };
 
-// Tap to start note
-document.body.insertAdjacentHTML('afterbegin', '<p id="tapnote" style="text-align:center;color:#8f9a96;font-size:13px">Tap Play to start audio. On iOS the silent switch mutes Web Audio.</p>');
+document.body.insertAdjacentHTML('afterbegin', '<p id=\"tapnote\" style=\"text-align:center;color:#8f9a96;font-size:13px\">Tap Play to start audio. On iOS the silent switch mutes Web Audio.</p>');
