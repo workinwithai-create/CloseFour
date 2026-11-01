@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>CloseFour — four-bar closing desk</title>
+  <meta name="description" content="Four live-instrument bars that resolve a stuck loop so the track can finish." />
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+<main>
+  <p class="eyebrow">WorkinWithAI · live chairs</p>
+  <h1>CloseFour</h1>
+  <p class="lead">Closing desk. Loops never end. Session players write four live bars that resolve — cadence, ritard, final hit, soft land — so the track can finish. Live piano, upright, nylon, kit, violin. Not a last-line tag. Not a pre-hook lift.</p>
+  <p class="status" id="status">Seating chairs…</p>
+  <p id="missing" class="missing" style="display:none"></p>
+  <div class="controls">
+    <label>BPM <input type="number" id="bpm" min="60" max="180" value="92" /></label>
+    <label>Key <select id="key"><option>A minor</option><option>C major</option><option>E major</option><option>D minor</option><option>G major</option></select></label>
+    <label>Bars <input type="number" id="bars" min="4" max="16" value="4" /></label>
+  </div>
+  <p class="eyebrow">Landing recipe</p>
+  <div class="row" id="recipes"></div>
+  <p class="eyebrow">Form · four closing bars</p>
+  <div class="bars" id="barsview"></div>
+  <h2>Punch list</h2>
+  <pre id="punch"></pre>
+  <div class="export-row">
+    <button id="exportWav">Export WAV</button>
+    <button id="exportMidi">Export MIDI</button>
+  </div>
+</main>
+<div class="dock">
+  <button id="play">Play landing</button>
+  <button class="ghost" id="stop">Stop</button>
+  <button class="ghost" id="copy">Copy punch</button>
+</div>
+<script type="module" src="./app.js"></script>
+</body>
+</html>
